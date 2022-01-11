@@ -1,1 +1,1 @@
-# esphome-emporia-vue
+# ESPHome Emporia Vue Utility Connect Firmware
