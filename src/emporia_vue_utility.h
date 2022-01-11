@@ -161,24 +161,6 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             } else {
                 W->publish_state(input_value);
             }
-
-            // Debug the other unknown bytes:
-            ESP_LOGD(TAG, "Unknown1 = %x %x %x %x (%d)", 
-                    mr->unknown1[0], mr->unknown1[1], mr->unknown1[2], mr->unknown1[3],
-                    byte_32_read(mr->unknown1));
-            ESP_LOGD(TAG, "Unknown3 = %x %x %x %x (%d)", 
-                    mr->unknown3[0], mr->unknown3[1], mr->unknown3[2], mr->unknown3[3],
-                    byte_32_read(mr->unknown3));
-            ESP_LOGD(TAG, "Unknown4 = %x %x %x %x (%d)", 
-                    mr->unknown4[0], mr->unknown4[1], mr->unknown4[2], mr->unknown4[3],
-                    byte_32_read(mr->unknown4));
-            ESP_LOGD(TAG, "Unknown5 = %x %x %x %x (%d)", 
-                    mr->unknown5[0], mr->unknown5[1], mr->unknown5[2], mr->unknown5[3],
-                    byte_32_read(mr->unknown5));
-            ESP_LOG_BUFFER_HEXDUMP(TAG, mr->unknown6, sizeof(mr->unknown6), ESP_LOG_INFO);
-            ESP_LOGD(TAG, "Unknown7 = %x %x %x %x (%d)", 
-                    mr->unknown7[0], mr->unknown7[1], mr->unknown7[2], mr->unknown7[3],
-                    byte_32_read(mr->unknown7));
         }
 
         void handle_resp_meter_join() {
