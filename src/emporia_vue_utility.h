@@ -2,6 +2,9 @@
 #include "sensor.h"
 #include "esphome/components/gpio/output/gpio_binary_output.h"
 
+// Extra meter reading response debugging
+#define DEBUG_VUE_RESPONSE true
+
 class EmporiaVueUtility : public Component,  public UARTDevice {
     public:
         EmporiaVueUtility(UARTComponent *parent): UARTDevice(parent) {}
@@ -16,19 +19,15 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             char msg_type;
             uint8_t data_len;
             byte unknown1[4];
-            byte watt_hours[4];
-            byte unknown2[36];
-            byte unknown3[4];
-            byte unknown4[4];
-            byte unknown5[4];
-            byte watts[4];
-            byte unknown6[48];
-            byte unknown7[4];
+            uint32_t watt_hours;
+            byte unknown2[48];
+            uint32_t watts;
+            byte unknown3[88];
+            uint32_t ms_since_reset;
         };
 
         union input_buffer {
-            byte data[260];
-            struct Message msg;
+            byte data[260]; // 4 byte header + 255 bytes payload + 1 byte terminator
             struct MeterReading mr;
         } input_buffer;
 
@@ -123,12 +122,13 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             return 0;
         }
 
-        uint32_t byte_32_read(const byte *inb) {
+        // Byte-swap a 32 bit int
+        uint32_t bswap32(uint32_t in) {
             uint32_t x = 0;
-            x += inb[0] << 24;
-            x += inb[1] << 16;
-            x += inb[2] <<  8;
-            x += inb[3];
+            x += (in & 0x000000FF) << 24;
+            x += (in & 0x0000FF00) <<  8;
+            x += (in & 0x00FF0000) >>  8;
+            x += (in & 0xFF000000) >> 24;
             return x;
         }
 
@@ -137,29 +137,59 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             struct MeterReading *mr;
             mr = &input_buffer.mr;
 
+            // Make sure the packet is as long as we expect
+            if (pos < sizeof(struct MeterReading)) {
+                ESP_LOGE(TAG, "Short meter reading packet");
+                ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
+                return;
+            }
+
             // Read the watt-hours value
-            input_value  = byte_32_read(mr->watt_hours);
-            if (input_value >= 4194304) {
-                ESP_LOGE(TAG, "Invalid watt-hours data");
-                ESP_LOG_BUFFER_HEXDUMP(TAG, mr->watt_hours, 4, ESP_LOG_ERROR);
+            input_value  = bswap32(mr->watt_hours);
+            if (input_value == 4194304) { //  "missing data" message (0x00 40 00 00)
+                ESP_LOGD(TAG, "Watt-hours value missing");
+            }
+            else if (input_value > 4194304) { 
+                ESP_LOGE(TAG, "Unreasonable watt-hours data");
+                ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watt_hours, 4, ESP_LOG_ERROR);
                 ESP_LOGE(TAG, "Full packet:");
                 ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
-            } else {
+            }
+            else {
                 kWh->publish_state(float(input_value) / 1000.0);
             }
 
             // Read the instant watts value
-            input_value = byte_32_read(mr->watts);
+            input_value = bswap32(mr->watts);
             if (input_value == 8388608) { // Appears to be "missing data" message (0x00 80 00 00)
                 ESP_LOGD(TAG, "Instant Watts value missing");
             } 
             else if (input_value >= 131072) {
                 ESP_LOGE(TAG, "Unreasonable watts value %d", input_value);
-                ESP_LOG_BUFFER_HEXDUMP(TAG, mr->watts, 4, ESP_LOG_ERROR);
+                ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watts, 4, ESP_LOG_ERROR);
                 ESP_LOGE(TAG, "Full packet:");
                 ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
-            } else {
+            }
+            else {
                 W->publish_state(input_value);
+            }
+
+            // Unlike the other values, ms_since_reset is in our native byte order
+            ESP_LOGD(TAG, "Seconds since meter watt-hour reset: %.3f", float(mr->ms_since_reset) / 1000.0 );
+
+            // Extra debugging of non-zero bytes, only on first packet or if DEBUG_VUE_RESPONSE is true
+            if ((DEBUG_VUE_RESPONSE) || (last_meter_reading == 0)) {
+                for (int x = 1 ; x < pos / 4 ; x++) {
+                    int y = x * 4;
+                    if (       (input_buffer.data[y])
+                            || (input_buffer.data[y+1])
+                            || (input_buffer.data[y+2])
+                            || (input_buffer.data[y+3])) {
+                        ESP_LOGD(TAG, "Meter Response Bytes %3d to %3d: %02x %02x %02x %02x", y-4, y-1,
+                                input_buffer.data[y], input_buffer.data[y+1],
+                                input_buffer.data[y+2], input_buffer.data[y+3]);
+                    }
+                }
             }
         }
 
@@ -188,10 +218,6 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
         }
 
         void loop() override {
-            float curr_kWh;
-            uint32_t curr_Watts;
-            int packet_len = 0;
-            int bytes_rx;
             char msg_type = 0;
             size_t msg_len = 0;
             byte inb;
@@ -219,12 +245,16 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                 pos = 0;
             }
 
-            if (now - last_meter_requested > meter_reading_interval) {
+            // Every meter_reading_interval seconds, request a new meter reading
+            if (now - last_meter_requested >= meter_reading_interval) {
                 send_meter_request();
                 last_meter_requested = now;
             }
-            if ((now - last_meter_reading > (meter_reading_interval * 5)) 
-                    && (now - last_meter_join > meter_join_interval)) {
+
+            // If we haven't received a meter reading after about 5 attempts,
+            // attempt to re-join the meter
+            if ((now - last_meter_reading >= (meter_reading_interval * 5)) 
+                    && (now - last_meter_join >= meter_join_interval)) {
                 send_meter_join();
                 last_meter_join = now;
             }
