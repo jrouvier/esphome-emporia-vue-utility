@@ -52,6 +52,6 @@ The install code bytes are also swapped, see mac address response above
 | 44 - 47 | Unknown, seems to typically be `0x0000 0001` |
 | 48 - 51 | Potentially a Watt-Hour to kWh divisor, typically `0x0000 0x03E8` (1000) |
 | 52 - 55 | Unknown, typically `0xfbfb 0000` |
-| 56 - 59 | Current watts being consumed |
+| 56 - 59 | Watts being consumed right now.  Sometimes data is missing, indicated by `0x0080 0000` |
 | 60 - 147 | Unknown, usually zeros |
-| 148 - 151 | Time in ms since the watt-hour value was reset to zero, big endian |
+| 148 - 151 | Time since the watt-hour value was reset to zero in ms as a big endian number |
