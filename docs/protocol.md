@@ -46,10 +46,12 @@ The install code bytes are also swapped, see mac address response above
 
 | Bytes | Meaning |
 | ----- | ------- |
-| 0 - 3 | Unknown, usually zeros |
-| 4 - 8 | Watt hours consumed.  Sometimes an invalid number greater than `0x0040 0000` is returned, which is not well understood |
-| 9 - 45 | Unknown, seems to always be zeros |
-| 46 - 50 | Unknown, seems to typically be `0x0000 0001` |
-| 51 - 55 | Potentially a Watt-Hour to kWh divisor, typically `0x0000 0x03E8` (1000) |
-| 56 - 60 | Current watts being consumed |
-| 61+ | Unknown |
+|  0 -  3 | Unknown, usually zeros |
+|  4 -  7 | Watt hours consumed.  Sometimes an invalid number greater than `0x0040 0000` is returned, which is not well understood |
+|  8 - 43 | Unknown, seems to always be zeros |
+| 44 - 47 | Unknown, seems to typically be `0x0000 0001` |
+| 48 - 51 | Potentially a Watt-Hour to kWh divisor, typically `0x0000 0x03E8` (1000) |
+| 52 - 55 | Unknown, typically `0xfbfb 0000` |
+| 56 - 59 | Current watts being consumed |
+| 60 - 147 | Unknown, usually zeros |
+| 148 - 151 | Time in ms since the watt-hour value was reset to zero, big endian |
