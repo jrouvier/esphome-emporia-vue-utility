@@ -39,7 +39,7 @@ ESP32 Serial programming interface.  Note that pin 6 is 5 volt, not 3.3 volt.
 |  2  |     3   |      EN  |
 |  3  |         |     GND  |
 |  4  |    35   |      TX  |
-|  5  |    35   |      RX  |
+|  5  |    34   |      RX  |
 |  6  |         |     +5v  |
 
 
