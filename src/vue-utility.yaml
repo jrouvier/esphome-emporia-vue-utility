@@ -17,6 +17,9 @@ wifi:
 ota:
 
 logger:
+    logs:
+        # Change to DEBUG / INFO / WARN / ERROR as desired
+        Vue: DEBUG
 
 api:
 
@@ -107,20 +110,4 @@ status_led:
         number: GPIO25
         # It *is* inverted, but being normally on looks better
         inverted: false
-
-# The other two LEDs on the device
-# Not currently used by anything 
-output:
-    # D2 LED / "Wifi" on the case
-    - platform: gpio
-      id: wifi_led
-      pin:
-          number: GPIO33
-          inverted: true
-    # D1 LED / "connect" on the case
-    - platform: gpio
-      id: connect_led
-      pin:
-          number: GPIO32
-          inverted: true
 

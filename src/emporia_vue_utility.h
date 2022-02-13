@@ -1,6 +1,5 @@
 #include "esphome.h"
 #include "sensor.h"
-#include "esphome/components/gpio/output/gpio_binary_output.h"
 
 // Extra meter reading response debugging
 #define DEBUG_VUE_RESPONSE true
@@ -22,14 +21,22 @@
 #define MAX_WH_CHANGE_ARY 5
 
 // How often to request a reading from the meter in seconds.
-// Meters typically only have new data every few seconds,
-// so "5" is usually fine.  You might try setting this to "1"
-// to see if your meter has new values more often
+// Meters typically update the reported value only once every
+// 10 to 30 seconds, so "5" is usually fine.
+// You might try setting this to "1" to see if your meter has
+// new values more often
 #define METER_READING_INTERVAL 5
 
 // How often to attempt to re-join the meter when it hasn't
 // been returning readings
 #define METER_REJOIN_INTERVAL 30
+
+// Should this code manage the "wifi" and "link" LEDs?
+// set to false if you want manually manage them elsewhere
+#define USE_LED_PINS true
+
+#define LED_PIN_LINK 32
+#define LED_PIN_WIFI 33
 
 class EmporiaVueUtility : public Component,  public UARTDevice {
     public:
@@ -39,7 +46,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
         Sensor *kWh_produced = new Sensor();
         Sensor *W       = new Sensor();
 
-        const char *TAG = "EmporiaVue";
+        const char *TAG = "Vue";
 
         struct MeterReading {
             char header;
@@ -63,8 +70,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
         uint16_t data_len;
 
         time_t last_meter_reading = 0;
-        time_t last_meter_requested = 0;
-        time_t last_meter_join = 0;
+        time_t now;
 
         // Reads and logs everything from serial until it runs
         // out of data or encounters a 0x0d byte (ascii CR)
@@ -215,15 +221,16 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             if (
                       (watt_hours == 4194304) //  "missing data" message (0x00 40 00 00)
                    || (watt_hours == 0)) { 
-                ESP_LOGD(TAG, "Watt-hours value missing");
+                ESP_LOGI(TAG, "Watt-hours value missing");
                 return;
             }
 
-            // Initialize watt-hour filter on first run
             if (!not_first_run) {
+                // Initialize watt-hour filter on first run
                 for (x = MAX_WH_CHANGE_ARY ; x != 0 ; x--) {
                     history[x-1] = watt_hours;
                 }
+
                 not_first_run = 1;
             }
 
@@ -260,7 +267,9 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             // On a reset of the meter net value and also on first boot
             // we don't want the consumed and produced values to be insane.
             if (abs(wh_diff) > MAX_WH_CHANGE) {
-                ESP_LOGE(TAG, "Skipping absurd watt-hour delta of +%d", wh_diff);
+                if (wh_diff != watt_hours) {
+                    ESP_LOGE(TAG, "Skipping absurd watt-hour delta of +%d", wh_diff);
+                }
                 return;
             }
 
@@ -294,7 +303,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             if (watts & 0x800000) {
                 if (watts == 0x800000) {
                     // Exactly "negative zero", which means "missing data"
-                    ESP_LOGD(TAG, "Instant Watts value missing");
+                    ESP_LOGI(TAG, "Instant Watts value missing");
                     return;
                 }
                 watts -= 0x800000;
@@ -318,23 +327,47 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             const byte msg[] = { 0x24, 0x72, 0x0d };
             ESP_LOGD(TAG, "Sending request for meter reading");
             write_array(msg, sizeof(msg));
+#if USE_LED_PINS
+            digitalWrite(LED_PIN_LINK, 1); // Turn off "link" LED
+#endif
         }
+
         void send_meter_join() {
             const byte msg[] = { 0x24, 0x6a, 0x0d };
-            ESP_LOGD(TAG, "Sending meter join");
+            ESP_LOGI(TAG, "Sending meter join");
             write_array(msg, sizeof(msg));
+#if USE_LED_PINS
+            digitalWrite(LED_PIN_WIFI, 1); // Turn off "wifi" LED
+#endif
+        }
+
+        void clear_serial_input() {
+            write(0x0d);
+            flush();
+            delay(100);
+            while (available()) {
+                while (available()) read();
+                delay(100);
+            }
         }
 
         void setup() override {
-            write(0x0d);
-            dump_serial_input(false);
+#if USE_LED_PINS
+            pinMode(LED_PIN_LINK, OUTPUT);
+            pinMode(LED_PIN_WIFI, OUTPUT);
+            digitalWrite(LED_PIN_LINK, 1);
+            digitalWrite(LED_PIN_WIFI, 1);
+#endif
+            clear_serial_input();
+            send_meter_join();
         }
 
         void loop() override {
+            static time_t last_meter_requested;
+            static time_t last_meter_join;
             char msg_type = 0;
             size_t msg_len = 0;
             byte inb;
-            time_t now;
 
             msg_len = read_msg();
             now = time(&now);
@@ -344,11 +377,17 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
 
                 switch (msg_type) {
                     case 'r': // Meter reading
+#if USE_LED_PINS
+                        digitalWrite(LED_PIN_LINK, 0);
+#endif
                         handle_resp_meter_reading();
                         last_meter_reading = now;
                         break;
                     case 'j': // Meter reading
                         handle_resp_meter_join();
+#if USE_LED_PINS
+                        digitalWrite(LED_PIN_WIFI, 0);
+#endif
                         break;
                     default:
                         ESP_LOGE(TAG, "Unhandled response type '%c'", msg_type);
