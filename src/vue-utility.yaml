@@ -43,6 +43,7 @@ sensor:
       sensors:
           - name: "kWh"
             id: kwh
+            unit_of_measurement: "kWh"
             accuracy_decimals: 3
             state_class: total_increasing
             device_class: energy
