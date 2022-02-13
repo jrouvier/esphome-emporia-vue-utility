@@ -26,7 +26,6 @@ a portable USB battery pack works well for this.
 
 Instead of connecting IO0 and EN, you can simply short IO0 to ground while connecting power to get the device into bootloader mode.
 
-Download [emporia_vue_utility.h](src/emporia_vue_utility.h) and either one of [vue-utility.yaml](src/vue-utility.yaml) or
-[vue-utility-solar.yaml](src/vue-utility-solar.yaml) if you have local energy production.
+Download one of the [releases](releases) and extract.  Edit either `vue-utility.yaml` or `vue-utility-solar.yaml` if you have local energy production and modify to your liking.
 
-Execute `esphome run vue-utility-*.yaml` to build and install
+Execute `esphome run vue-utility.yaml` or `esphome run vue-utility-solar.yaml` to build and install.
