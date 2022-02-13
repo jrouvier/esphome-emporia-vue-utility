@@ -1,0 +1,127 @@
+####################################################
+# config for homes without solar / wind production #
+####################################################
+
+esphome:
+    name: vue-utility
+    platform: ESP32
+    board: esp-wrover-kit
+    includes:
+        - emporia_vue_utility.h
+
+# Add your own wifi credentials
+wifi:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+ota:
+
+logger:
+
+api:
+
+mqtt:
+    broker: !secret mqtt_broker
+    id: vue-utility
+    username: !secret mqtt_username
+    password: !secret mqtt_password
+    discovery: False # Only if you use the HA API usually
+
+# This uart connects to the MGM111
+uart:
+    id: emporia_uart
+    rx_pin: GPIO21
+    tx_pin: GPIO22
+    baud_rate: 115200
+
+sensor:
+    - platform: custom
+      lambda: |-
+        auto vue = new EmporiaVueUtility(id(emporia_uart));
+        App.register_component(vue);
+        return {vue->kWh_net, vue->W};
+      sensors:
+          - name: "kWh"
+            id: kwh
+            accuracy_decimals: 3
+            state_class: total_increasing
+            device_class: energy
+            # Reduce the rate of reporting the value to
+            # once every 5 minutes and/or when 0.1 kwh
+            # have been consumed, unless the fast_reporting
+            # button has been pushed
+            filters:
+                - or:
+                    - throttle: 5min
+                    - delta: 0.1 # <- kWh
+                    - lambda: |-
+                        if (id(fast_reporting)) return(x);
+                        return {};
+            on_raw_value:
+                then:
+                    lambda: |-
+                        ESP_LOGI("Vue", "kWh = %0.3f", x);
+          - name: "Watts"
+            id: watts
+            unit_of_measurement: "W"
+            accuracy_decimals: 0
+            state_class: measurement
+            device_class: power
+            # Report every 5 minutes or when +/- 20 watts
+            filters:
+                - or:
+                    - throttle: 5min
+                    - delta: 20  # <- watts
+                    - lambda: |-
+                        if (id(fast_reporting)) return(x);
+                        return {};
+            on_raw_value:
+                then:
+                    lambda: |-
+                        ESP_LOGI("Vue", "Watts = %0.3f", x);
+
+
+# This gives you a button that temporarily causes results to be
+# reported every few seconds instead of on significant change
+# and/or every 5 minutes
+button:
+    - platform: template
+      name: "Fast Reporting"
+      id: fast_reporting_button
+      on_press:
+        - lambda: id(fast_reporting) = true;
+        - delay: 5min
+        - lambda: id(fast_reporting) = false;
+
+# Global value for above button
+globals:
+    - id: fast_reporting
+      type: bool
+      restore_value: no
+      initial_value: "false"
+
+# This LED is marked D3 on the pcb and is the power led on the case
+status_led:
+    pin:
+        number: GPIO25
+        # It *is* inverted, but being normally on looks better
+        inverted: false
+
+# The other two LEDs on the device
+# Not currently used by anything 
+output:
+    # D2 LED / "Wifi" on the case
+    - platform: gpio
+      id: wifi_led
+      name: "Wifi LED"
+      pin:
+          number: GPIO33
+          inverted: true
+    # D1 LED / "connect" on the case
+    - platform: gpio
+      id: connect_led
+      name: "Connect LED"
+      pin:
+          number: GPIO32
+          inverted: true
+

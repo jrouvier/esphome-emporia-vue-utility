@@ -1,6 +1,6 @@
-###############
-# Full config #
-###############
+##################################################
+# Config for homes with solar or wind production #
+##################################################
 
 esphome:
     name: vue-utility
@@ -39,10 +39,10 @@ sensor:
       lambda: |-
         auto vue = new EmporiaVueUtility(id(emporia_uart));
         App.register_component(vue);
-        return {vue->kWh, vue->W};
+        return {vue->kWh_consumed, vue->kWh_produced, vue->W};
       sensors:
-          - name: "kWh"
-            id: kwh
+          - name: "kWh Consumed"
+            id: kWh_consumed
             accuracy_decimals: 3
             state_class: total_increasing
             device_class: energy
@@ -52,8 +52,8 @@ sensor:
             # button has been pushed
             filters:
                 - or:
-                    - throttle: 5m
-                    - delta: 0.1
+                    - throttle: 5min
+                    - delta: 0.1 # <- kWh
                     - lambda: |-
                         if (id(fast_reporting)) return(x);
                         return {};
@@ -61,6 +61,28 @@ sensor:
                 then:
                     lambda: |-
                         ESP_LOGI("Vue", "kWh = %0.3f", x);
+
+          - name: "kWh Produced"
+            id: kWh_produced
+            accuracy_decimals: 3
+            state_class: total_increasing
+            device_class: energy
+            # Reduce the rate of reporting the value to
+            # once every 5 minutes and/or when 0.1 kwh
+            # have been produced, unless the fast_reporting
+            # button has been pushed
+            filters:
+                - or:
+                    - throttle: 5min
+                    - delta: 0.1 # <- kWh
+                    - lambda: |-
+                        if (id(fast_reporting)) return(x);
+                        return {};
+            on_raw_value:
+                then:
+                    lambda: |-
+                        ESP_LOGI("Vue", "kWh = %0.3f", x);
+
           - name: "Watts"
             id: watts
             unit_of_measurement: "W"
@@ -70,8 +92,8 @@ sensor:
             # Report every 5 minutes or when +/- 20 watts
             filters:
                 - or:
-                    - throttle: 5m
-                    - delta: 20
+                    - throttle: 5min
+                    - delta: 20  # <- watts
                     - lambda: |-
                         if (id(fast_reporting)) return(x);
                         return {};
@@ -79,7 +101,6 @@ sensor:
                 then:
                     lambda: |-
                         ESP_LOGI("Vue", "Watts = %0.3f", x);
-
 
 # This gives you a button that temporarily causes results to be
 # reported every few seconds instead of on significant change

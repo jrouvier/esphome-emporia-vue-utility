@@ -5,11 +5,39 @@
 // Extra meter reading response debugging
 #define DEBUG_VUE_RESPONSE true
 
+// If the instant watts being consumed meter reading is outside of these ranges,
+// the sample will be ignored which helps prevent garbage data from polluting
+// home assistant graphs.  Note this is the instant watts value, not the
+// watt-hours value, which has smarter filtering.  The defaults of 131kW
+// should be fine for most people.  (131072 = 0x20000)
+#define WATTS_MIN -131072 
+#define WATTS_MAX  131072
+
+// How much the watt-hours consumed value can change between samples.
+// Values that change by more than this over the avg value across the
+// previous 5 samples will be discarded.  
+#define MAX_WH_CHANGE 2000
+
+// How many samples to average the watt-hours value over. 
+#define MAX_WH_CHANGE_ARY 5
+
+// How often to request a reading from the meter in seconds.
+// Meters typically only have new data every few seconds,
+// so "5" is usually fine.  You might try setting this to "1"
+// to see if your meter has new values more often
+#define METER_READING_INTERVAL 5
+
+// How often to attempt to re-join the meter when it hasn't
+// been returning readings
+#define METER_REJOIN_INTERVAL 30
+
 class EmporiaVueUtility : public Component,  public UARTDevice {
     public:
         EmporiaVueUtility(UARTComponent *parent): UARTDevice(parent) {}
-        Sensor *kWh = new Sensor();
-        Sensor *W   = new Sensor();
+        Sensor *kWh_net      = new Sensor();
+        Sensor *kWh_consumed = new Sensor();
+        Sensor *kWh_produced = new Sensor();
+        Sensor *W       = new Sensor();
 
         const char *TAG = "EmporiaVue";
 
@@ -37,8 +65,6 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
         time_t last_meter_reading = 0;
         time_t last_meter_requested = 0;
         time_t last_meter_join = 0;
-        const time_t meter_reading_interval = 5;
-        const time_t meter_join_interval = 30;
 
         // Reads and logs everything from serial until it runs
         // out of data or encounters a 0x0d byte (ascii CR)
@@ -122,8 +148,9 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             return 0;
         }
 
-        // Byte-swap a 32 bit int
-        uint32_t bswap32(uint32_t in) {
+        // Byte-swap a 32 bit int in the proprietary format
+        // used by the MGS111
+        int32_t bswap32(uint32_t in) {
             uint32_t x = 0;
             x += (in & 0x000000FF) << 24;
             x += (in & 0x0000FF00) <<  8;
@@ -133,7 +160,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
         }
 
         void handle_resp_meter_reading() {
-            uint32_t input_value;
+            int32_t input_value;
             struct MeterReading *mr;
             mr = &input_buffer.mr;
 
@@ -144,35 +171,8 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                 return;
             }
 
-            // Read the watt-hours value
-            input_value  = bswap32(mr->watt_hours);
-            if (input_value == 4194304) { //  "missing data" message (0x00 40 00 00)
-                ESP_LOGD(TAG, "Watt-hours value missing");
-            }
-            else if (input_value > 4194304) { 
-                ESP_LOGE(TAG, "Unreasonable watt-hours data");
-                ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watt_hours, 4, ESP_LOG_ERROR);
-                ESP_LOGE(TAG, "Full packet:");
-                ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
-            }
-            else {
-                kWh->publish_state(float(input_value) / 1000.0);
-            }
-
-            // Read the instant watts value
-            input_value = bswap32(mr->watts);
-            if (input_value == 8388608) { // Appears to be "missing data" message (0x00 80 00 00)
-                ESP_LOGD(TAG, "Instant Watts value missing");
-            } 
-            else if (input_value >= 131072) {
-                ESP_LOGE(TAG, "Unreasonable watts value %d", input_value);
-                ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watts, 4, ESP_LOG_ERROR);
-                ESP_LOGE(TAG, "Full packet:");
-                ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
-            }
-            else {
-                W->publish_state(input_value);
-            }
+            parse_meter_watt_hours(mr);
+            parse_meter_watts(mr);
 
             // Unlike the other values, ms_since_reset is in our native byte order
             ESP_LOGD(TAG, "Seconds since meter watt-hour reset: %.3f", float(mr->ms_since_reset) / 1000.0 );
@@ -193,6 +193,123 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             }
         }
 
+        void parse_meter_watt_hours(struct MeterReading *mr) {
+            // Keep the last N watt-hour samples so invalid new samples can be discarded
+            static int32_t history[MAX_WH_CHANGE_ARY];
+            static uint8_t  history_pos;
+            static bool not_first_run;
+
+            // Counters for deriving consumed and produced separately
+            static int32_t consumed;
+            static int32_t produced;
+
+            // So we can avoid updating when no change
+            static int32_t prev_reported_net;
+
+            int32_t watt_hours;
+            int32_t wh_diff;
+            int32_t history_avg;
+            int8_t x;
+
+            watt_hours = bswap32(mr->watt_hours);
+            if (
+                      (watt_hours == 4194304) //  "missing data" message (0x00 40 00 00)
+                   || (watt_hours == 0)) { 
+                ESP_LOGD(TAG, "Watt-hours value missing");
+                return;
+            }
+
+            // Initialize watt-hour filter on first run
+            if (!not_first_run) {
+                for (x = MAX_WH_CHANGE_ARY ; x != 0 ; x--) {
+                    history[x-1] = watt_hours;
+                }
+                not_first_run = 1;
+            }
+
+            // Insert a new value into filter array
+            history_pos++;
+            if (history_pos == MAX_WH_CHANGE_ARY) {
+                history_pos = 0;
+            }
+            history[history_pos] = watt_hours;
+
+            history_avg = 0;
+            // Calculate avg watt_hours over previous N samples
+            for (x = MAX_WH_CHANGE_ARY ; x != 0 ; x--) {
+                history_avg += history[x-1] / MAX_WH_CHANGE_ARY;
+            }
+
+            // Get the difference of current value from avg
+            wh_diff = history_avg - watt_hours;
+
+            if (abs(wh_diff) > MAX_WH_CHANGE) {
+                ESP_LOGE(TAG, "Unreasonable watt-hours data of %d, +%d from moving avg",
+                        watt_hours, wh_diff);
+                ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watt_hours, 4, ESP_LOG_ERROR);
+                ESP_LOGE(TAG, "Full packet:");
+                ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
+                return;
+            }
+
+            // Change wd_diff to difference from previously reported value
+            // instead of diff from average
+            wh_diff = watt_hours - prev_reported_net;
+            prev_reported_net = watt_hours;
+
+            // On a reset of the meter net value and also on first boot
+            // we don't want the consumed and produced values to be insane.
+            if (abs(wh_diff) > MAX_WH_CHANGE) {
+                ESP_LOGE(TAG, "Skipping absurd watt-hour delta of +%d", wh_diff);
+                return;
+            }
+
+            if (wh_diff > 0) { // Energy consumed from grid
+                if (consumed > UINT32_MAX - wh_diff) {
+                    consumed -= UINT32_MAX - wh_diff;
+                } else {
+                    consumed += wh_diff;
+                }
+            }
+            if (wh_diff < 0) { // Energy sent to grid
+                if (produced > UINT32_MAX - wh_diff) {
+                    produced -= UINT32_MAX - wh_diff;
+                } else {
+                    produced += wh_diff;
+                }
+            }
+
+            kWh_consumed->publish_state(float(consumed) / 1000.0);
+            kWh_produced->publish_state(float(produced) / 1000.0);
+            kWh_net->publish_state(float(watt_hours) / 1000.0);
+        }
+
+        void parse_meter_watts(struct MeterReading *mr) {
+            int32_t watts;
+
+            // Read the instant watts value
+            watts = bswap32(mr->watts);
+
+            // Bit 1 of the left most byte indicates a negative value
+            if (watts & 0x800000) {
+                if (watts == 0x800000) {
+                    // Exactly "negative zero", which means "missing data"
+                    ESP_LOGD(TAG, "Instant Watts value missing");
+                    return;
+                }
+                watts -= 0x800000;
+            }
+
+            if ((watts >= WATTS_MAX) || (watts < WATTS_MIN)) {
+                ESP_LOGE(TAG, "Unreasonable watts value %d", watts);
+                ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watts, 4, ESP_LOG_ERROR);
+                ESP_LOGE(TAG, "Full packet:");
+                ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
+                return;
+            }
+            W->publish_state(watts);
+        }
+
         void handle_resp_meter_join() {
             ESP_LOGD(TAG, "Got meter join response");
         }
@@ -210,10 +327,6 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
 
         void setup() override {
             write(0x0d);
-            dump_serial_input(false);
-            sleep(1);
-            dump_serial_input(false);
-            sleep(1);
             dump_serial_input(false);
         }
 
@@ -246,15 +359,15 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             }
 
             // Every meter_reading_interval seconds, request a new meter reading
-            if (now - last_meter_requested >= meter_reading_interval) {
+            if (now - last_meter_requested >= METER_READING_INTERVAL) {
                 send_meter_request();
                 last_meter_requested = now;
             }
 
             // If we haven't received a meter reading after about 5 attempts,
             // attempt to re-join the meter
-            if ((now - last_meter_reading >= (meter_reading_interval * 5)) 
-                    && (now - last_meter_join >= meter_join_interval)) {
+            if ((now - last_meter_reading >= (METER_READING_INTERVAL * 5)) 
+                    && (now - last_meter_join >= METER_REJOIN_INTERVAL)) {
                 send_meter_join();
                 last_meter_join = now;
             }
