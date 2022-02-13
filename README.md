@@ -26,7 +26,13 @@ a portable USB battery pack works well for this.
 
 Instead of connecting IO0 and EN, you can simply short IO0 to ground while connecting power to get the device into bootloader mode.
 
-Download [emporia_vue_utility.h](src/emporia_vue_utility.h) and either one of [vue-utility.yaml](src/vue-utility.yaml) or
-[vue-utility-solar.yaml](src/vue-utility-solar.yaml) if you have local energy production.
+Download one of the [releases](https://github.com/jrouvier/esphome-emporia-vue-utility/releases) and extract.  Edit either `vue-utility.yaml` or `vue-utility-solar.yaml` if you have local energy production and modify to your liking.
 
-Execute `esphome run vue-utility-*.yaml` to build and install
+Execute `esphome run vue-utility.yaml` or `esphome run vue-utility-solar.yaml` to build and install.
+
+## Meaning of LEDs
+
+There are three LEDs on the device, which have "power", "wifi" and "link" icons stenciled on the case.
+* **Power** = An ESPHome status led.  Slowly flashing means warning, quickly flashing means error, solid on means OK.  See [status_led](https://esphome.io/components/status_led.html) docs.
+* **Wifi** = Normally solid on, will briefly flash each time a meter rejoin is attempted which indicates poor signal from the meter.
+* **Link** = Flashes off briefly about once every 5 seconds.  More specifically, the LED turns off when a reading from the meter is requested and turns back on when a response is received.  If no response is received then the LED will remain off.  If this LED is never turning on then no readings are being returned by the meter.
