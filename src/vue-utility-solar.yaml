@@ -42,7 +42,7 @@ sensor:
       lambda: |-
         auto vue = new EmporiaVueUtility(id(emporia_uart));
         App.register_component(vue);
-        return {vue->kWh_consumed, vue->kWh_produced, vue->W, vue->kWh_net};
+        return {vue->kWh_consumed, vue->kWh_returned, vue->W, vue->kWh_net};
       sensors:
           - name: "kWh Consumed"
             id: kWh_consumed
@@ -66,15 +66,15 @@ sensor:
                     lambda: |-
                         ESP_LOGI("Vue", "kWh = %0.3f", x);
 
-          - name: "kWh Produced"
-            id: kWh_produced
+          - name: "kWh Returned"
+            id: kWh_returned
             unit_of_measurement: "kWh"
             accuracy_decimals: 3
             state_class: total_increasing
             device_class: energy
             # Reduce the rate of reporting the value to
             # once every 5 minutes and/or when 0.1 kwh
-            # have been produced, unless the fast_reporting
+            # have been returned, unless the fast_reporting
             # button has been pushed
             filters:
                 - or:
@@ -114,7 +114,7 @@ sensor:
             device_class: energy
             # Reduce the rate of reporting the value to
             # once every 5 minutes and/or when 0.1 kwh
-            # have been produced, unless the fast_reporting
+            # have been consumed or returned, unless the fast_reporting
             # button has been pushed
             filters:
                 - or:

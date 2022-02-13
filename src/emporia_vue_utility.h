@@ -43,7 +43,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
         EmporiaVueUtility(UARTComponent *parent): UARTDevice(parent) {}
         Sensor *kWh_net      = new Sensor();
         Sensor *kWh_consumed = new Sensor();
-        Sensor *kWh_produced = new Sensor();
+        Sensor *kWh_returned = new Sensor();
         Sensor *W       = new Sensor();
 
         const char *TAG = "Vue";
@@ -205,9 +205,9 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             static uint8_t  history_pos;
             static bool not_first_run;
 
-            // Counters for deriving consumed and produced separately
+            // Counters for deriving consumed and returned separately
             static int32_t consumed;
-            static int32_t produced;
+            static int32_t returned;
 
             // So we can avoid updating when no change
             static int32_t prev_reported_net;
@@ -265,7 +265,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             prev_reported_net = watt_hours;
 
             // On a reset of the meter net value and also on first boot
-            // we don't want the consumed and produced values to be insane.
+            // we don't want the consumed and returned values to be insane.
             if (abs(wh_diff) > MAX_WH_CHANGE) {
                 if (wh_diff != watt_hours) {
                     ESP_LOGE(TAG, "Skipping absurd watt-hour delta of +%d", wh_diff);
@@ -281,15 +281,15 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                 }
             }
             if (wh_diff < 0) { // Energy sent to grid
-                if (produced > UINT32_MAX - wh_diff) {
-                    produced -= UINT32_MAX - wh_diff;
+                if (returned > UINT32_MAX - wh_diff) {
+                    returned -= UINT32_MAX - wh_diff;
                 } else {
-                    produced += wh_diff;
+                    returned += wh_diff;
                 }
             }
 
             kWh_consumed->publish_state(float(consumed) / 1000.0);
-            kWh_produced->publish_state(float(produced) / 1000.0);
+            kWh_returned->publish_state(float(returned) / 1000.0);
             kWh_net->publish_state(float(watt_hours) / 1000.0);
         }
 
