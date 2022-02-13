@@ -113,14 +113,12 @@ output:
     # D2 LED / "Wifi" on the case
     - platform: gpio
       id: wifi_led
-      name: "Wifi LED"
       pin:
           number: GPIO33
           inverted: true
     # D1 LED / "connect" on the case
     - platform: gpio
       id: connect_led
-      name: "Connect LED"
       pin:
           number: GPIO32
           inverted: true
