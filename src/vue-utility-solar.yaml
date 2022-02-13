@@ -39,7 +39,7 @@ sensor:
       lambda: |-
         auto vue = new EmporiaVueUtility(id(emporia_uart));
         App.register_component(vue);
-        return {vue->kWh_consumed, vue->kWh_produced, vue->W};
+        return {vue->kWh_consumed, vue->kWh_produced, vue->W, vue->kWh_net};
       sensors:
           - name: "kWh Consumed"
             id: kWh_consumed
@@ -101,6 +101,26 @@ sensor:
                 then:
                     lambda: |-
                         ESP_LOGI("Vue", "Watts = %0.3f", x);
+          - name: "kWh Net"
+            id: kWh_net
+            accuracy_decimals: 3
+            device_class: energy
+            # Reduce the rate of reporting the value to
+            # once every 5 minutes and/or when 0.1 kwh
+            # have been produced, unless the fast_reporting
+            # button has been pushed
+            filters:
+                - or:
+                    - throttle: 5min
+                    - delta: 0.1 # <- kWh
+                    - lambda: |-
+                        if (id(fast_reporting)) return(x);
+                        return {};
+            on_raw_value:
+                then:
+                    lambda: |-
+                        ESP_LOGI("Vue", "kWh = %0.3f", x);
+
 
 # This gives you a button that temporarily causes results to be
 # reported every few seconds instead of on significant change
