@@ -306,7 +306,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                     ESP_LOGI(TAG, "Instant Watts value missing");
                     return;
                 }
-                watts -= 0x800000;
+                watts -= 0x1000000;
             }
 
             if ((watts >= WATTS_MAX) || (watts < WATTS_MIN)) {
