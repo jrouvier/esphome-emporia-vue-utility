@@ -317,6 +317,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                     // If we get here, then hopefully it's a negative
                     // number in signed magnitude format
                     watts = (watts ^ 0x800000) * -1;
+                }
             }
 
             if ((watts >= WATTS_MAX) || (watts < WATTS_MIN)) {
