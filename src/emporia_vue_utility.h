@@ -31,6 +31,9 @@
 // been returning readings
 #define METER_REJOIN_INTERVAL 30
 
+// On first startup, how long before trying to start to talk to meter
+#define INITIAL_STARTUP_DELAY 10
+
 // Should this code manage the "wifi" and "link" LEDs?
 // set to false if you want manually manage them elsewhere
 #define USE_LED_PINS true
@@ -61,16 +64,60 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             uint32_t ms_since_reset;
         };
 
+        // A Mac Address or install code response
+        struct Addr {
+            char header;
+            char is_resp;
+            char msg_type;
+            uint8_t data_len;
+            byte addr[8];
+            char newline;
+        };
+
+        // Firmware version response
+        struct Ver {
+            char header;
+            char is_resp;
+            char msg_type;
+            uint8_t data_len;
+            uint8_t value;
+            char newline;
+        };
+
         union input_buffer {
             byte data[260]; // 4 byte header + 255 bytes payload + 1 byte terminator
             struct MeterReading mr;
+            struct Addr addr;
+            struct Ver ver;
         } input_buffer;
+
+        char mgm_mac_address[25] = "";
+        char mgm_install_code[25] = "";
+        int mgm_firmware_ver = 0;
 
         uint16_t pos = 0;
         uint16_t data_len;
 
         time_t last_meter_reading = 0;
         time_t now;
+
+        // Turn the wifi led on/off
+        void led_wifi(bool state) {
+#if USE_LED_PINS
+            if (state) digitalWrite(LED_PIN_WIFI, 0);
+            else       digitalWrite(LED_PIN_WIFI, 1);
+#endif
+            return;
+        }
+
+        // Turn the link led on/off
+        void led_link(bool state) {
+#if USE_LED_PINS
+            if (state) digitalWrite(LED_PIN_LINK, 0);
+            else       digitalWrite(LED_PIN_LINK, 1);
+#endif
+            return;
+        }
 
         // Reads and logs everything from serial until it runs
         // out of data or encounters a 0x0d byte (ascii CR)
@@ -139,6 +186,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                         return 0;
                     default:
                         if (pos < data_len + 5) {
+
                             ;
                         } else if (c == 0x0d) { // 0x0d == "/r", which should end a message
                             return pos;
@@ -199,6 +247,17 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             }
         }
 
+        void ask_for_bug_report() {
+            ESP_LOGE(TAG, "If you continue to see this, please file a bug at");
+            ESP_LOGE(TAG, "  https://forms.gle/duMdU2i7wWHdbK5TA");
+            ESP_LOGE(TAG, "and include a few lines above this message and the data below until \"EOF\":");
+            ESP_LOGE(TAG, "Full packet:");
+            ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
+            ESP_LOGI(TAG, "MGM Firmware Version: %d",      mgm_firmware_ver);
+            ESP_LOGE(TAG, "EOF");
+        }
+
+
         void parse_meter_watt_hours(struct MeterReading *mr) {
             // Keep the last N watt-hour samples so invalid new samples can be discarded
             static int32_t history[MAX_WH_CHANGE_ARY];
@@ -222,6 +281,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                       (watt_hours == 4194304) //  "missing data" message (0x00 40 00 00)
                    || (watt_hours == 0)) { 
                 ESP_LOGI(TAG, "Watt-hours value missing");
+                ask_for_bug_report();
                 return;
             }
 
@@ -254,8 +314,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                 ESP_LOGE(TAG, "Unreasonable watt-hours data of %d, +%d from moving avg",
                         watt_hours, wh_diff);
                 ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watt_hours, 4, ESP_LOG_ERROR);
-                ESP_LOGE(TAG, "Full packet:");
-                ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
+                ask_for_bug_report();
                 return;
             }
 
@@ -269,6 +328,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             if (abs(wh_diff) > MAX_WH_CHANGE) {
                 if (wh_diff != watt_hours) {
                     ESP_LOGE(TAG, "Skipping absurd watt-hour delta of +%d", wh_diff);
+                    ask_for_bug_report();
                 }
                 return;
             }
@@ -323,8 +383,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             if ((watts >= WATTS_MAX) || (watts < WATTS_MIN)) {
                 ESP_LOGE(TAG, "Unreasonable watts value %d", watts);
                 ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watts, 4, ESP_LOG_ERROR);
-                ESP_LOGE(TAG, "Full packet:");
-                ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
+                ask_for_bug_report();
                 return;
             }
             W->publish_state(watts);
@@ -334,22 +393,94 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             ESP_LOGD(TAG, "Got meter join response");
         }
 
+        int handle_resp_mac_address() {
+            ESP_LOGD(TAG, "Got mac addr response");
+            struct Addr *mac;
+            mac = &input_buffer.addr;
+
+            snprintf(mgm_mac_address, sizeof(mgm_mac_address), "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                    mac->addr[7],
+                    mac->addr[6],
+                    mac->addr[5],
+                    mac->addr[4],
+                    mac->addr[3],
+                    mac->addr[2],
+                    mac->addr[1],
+                    mac->addr[0]);
+            ESP_LOGI(TAG, "MGM Mac Address: %s", mgm_mac_address);
+            return(0);
+        }
+
+        int handle_resp_install_code() {
+            ESP_LOGD(TAG, "Got install code response");
+            struct Addr *code;
+            code = &input_buffer.addr;
+
+            snprintf(mgm_install_code, sizeof(mgm_install_code), "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                    code->addr[0],
+                    code->addr[1],
+                    code->addr[2],
+                    code->addr[3],
+                    code->addr[4],
+                    code->addr[5],
+                    code->addr[6],
+                    code->addr[7]);
+            ESP_LOGI(TAG, "MGM Install Code: %s (secret)", mgm_install_code);
+            return(0);
+        }
+
+        int handle_resp_firmware_ver() {
+            struct Ver *ver;
+            ver = &input_buffer.ver;
+           
+            mgm_firmware_ver = ver->value;
+
+            ESP_LOGI(TAG, "MGM Firmware Version: %d", mgm_firmware_ver);
+            return(0);
+        }
+
         void send_meter_request() {
             const byte msg[] = { 0x24, 0x72, 0x0d };
             ESP_LOGD(TAG, "Sending request for meter reading");
             write_array(msg, sizeof(msg));
-#if USE_LED_PINS
-            digitalWrite(LED_PIN_LINK, 1); // Turn off "link" LED
-#endif
+            led_link(false);
         }
 
         void send_meter_join() {
             const byte msg[] = { 0x24, 0x6a, 0x0d };
-            ESP_LOGI(TAG, "Sending meter join");
+            ESP_LOGI(TAG, "MGM Firmware Version: %d",      mgm_firmware_ver);
+            ESP_LOGI(TAG, "MGM Mac Address:  %s",           mgm_mac_address);
+            ESP_LOGI(TAG, "MGM Install Code: %s (secret)", mgm_install_code);
+            ESP_LOGI(TAG, "Trying to re-join the meter.  If you continue to see this message");
+            ESP_LOGI(TAG, "you may need to move the device closer to your power meter or");
+            ESP_LOGI(TAG, "contact your utililty and ask them to reprovision the device.");
+            ESP_LOGI(TAG, "Also confirm that the above mac address & install code match");
+            ESP_LOGI(TAG, "what is printed on your device.");
+            ESP_LOGE(TAG, "You can also file a bug at");
+            ESP_LOGE(TAG, "  https://forms.gle/duMdU2i7wWHdbK5TA");
             write_array(msg, sizeof(msg));
-#if USE_LED_PINS
-            digitalWrite(LED_PIN_WIFI, 1); // Turn off "wifi" LED
-#endif
+            led_wifi(false);
+        }
+
+        void send_mac_req() {
+            const byte msg[] = { 0x24, 0x6d, 0x0d };
+            ESP_LOGD(TAG, "Sending mac addr request");
+            write_array(msg, sizeof(msg));
+            led_wifi(false);
+        }
+
+        void send_install_code_req() {
+            const byte msg[] = { 0x24, 0x69, 0x0d };
+            ESP_LOGD(TAG, "Sending install code request");
+            write_array(msg, sizeof(msg));
+            led_wifi(false);
+        }
+
+        void send_version_req() {
+            const byte msg[] = { 0x24, 0x66, 0x0d };
+            ESP_LOGD(TAG, "Sending firmware version request");
+            write_array(msg, sizeof(msg));
+            led_wifi(false);
         }
 
         void clear_serial_input() {
@@ -366,16 +497,16 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
 #if USE_LED_PINS
             pinMode(LED_PIN_LINK, OUTPUT);
             pinMode(LED_PIN_WIFI, OUTPUT);
-            digitalWrite(LED_PIN_LINK, 1);
-            digitalWrite(LED_PIN_WIFI, 1);
 #endif
+            led_link(false);
+            led_wifi(false);
             clear_serial_input();
-            send_meter_join();
         }
 
         void loop() override {
-            static time_t last_meter_requested;
-            static time_t last_meter_join;
+            static time_t next_meter_request;
+            static time_t next_meter_join;
+            static uint8_t startup_step;
             char msg_type = 0;
             size_t msg_len = 0;
             byte inb;
@@ -388,17 +519,48 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
 
                 switch (msg_type) {
                     case 'r': // Meter reading
-#if USE_LED_PINS
-                        digitalWrite(LED_PIN_LINK, 0);
-#endif
+                        led_link(true);
                         handle_resp_meter_reading();
                         last_meter_reading = now;
+                        next_meter_join = now + METER_REJOIN_INTERVAL;
                         break;
                     case 'j': // Meter reading
                         handle_resp_meter_join();
-#if USE_LED_PINS
-                        digitalWrite(LED_PIN_WIFI, 0);
-#endif
+                        led_wifi(true);
+                        if (startup_step == 3) {
+                            send_meter_request();
+                            startup_step++;
+                        }
+                        break;
+                    case 'f':
+                        if (!handle_resp_firmware_ver()) {
+                            led_wifi(true);
+                            if (startup_step == 0) {
+                                startup_step++;
+                                send_mac_req();
+                                next_meter_request = now + METER_READING_INTERVAL;
+                            }
+                        }
+                        break;
+                    case 'm': // Mac address
+                        if (!handle_resp_mac_address()) {
+                            led_wifi(true);
+                            if (startup_step == 1) {
+                                startup_step++;
+                                send_install_code_req();
+                                next_meter_request = now + METER_READING_INTERVAL;
+                            }
+                        }
+                        break;
+                    case 'i':
+                        if (!handle_resp_install_code()) {
+                            led_wifi(true);
+                            if (startup_step == 2) {
+                                startup_step++;
+                                send_meter_request();
+                                next_meter_request = now + METER_READING_INTERVAL;
+                            }
+                        }
                         break;
                     default:
                         ESP_LOGE(TAG, "Unhandled response type '%c'", msg_type);
@@ -408,18 +570,31 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                 pos = 0;
             }
 
-            // Every meter_reading_interval seconds, request a new meter reading
-            if (now - last_meter_requested >= METER_READING_INTERVAL) {
-                send_meter_request();
-                last_meter_requested = now;
-            }
+            if (now >= next_meter_request) {
 
-            // If we haven't received a meter reading after about 5 attempts,
-            // attempt to re-join the meter
-            if ((now - last_meter_reading >= (METER_READING_INTERVAL * 5)) 
-                    && (now - last_meter_join >= METER_REJOIN_INTERVAL)) {
-                send_meter_join();
-                last_meter_join = now;
+                // Handle initial startup delay 
+                if (next_meter_request == 0) {                    
+                    next_meter_request = now + INITIAL_STARTUP_DELAY;
+                    next_meter_join    = next_meter_request + METER_REJOIN_INTERVAL;
+                    return;
+                }
+
+                // Schedule the next MGM message
+                next_meter_request = now + METER_READING_INTERVAL;
+
+                if (now > next_meter_join) {
+                    startup_step = 9; // Cancel startup messages
+                    send_meter_join();
+                    next_meter_join = now + METER_REJOIN_INTERVAL;
+                    return;
+                }
+               
+                if      (startup_step == 0) send_version_req();
+                else if (startup_step == 1) send_mac_req();
+                else if (startup_step == 2) send_install_code_req();
+                else if (startup_step == 3) send_meter_join();
+                else                        send_meter_request();
+                
             }
         }
 };
