@@ -297,7 +297,8 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             int32_t watts;
 
             // Read the instant watts value
-            watts = bswap32(mr->watts);
+            // (it's actually a 24-bit int)
+            watts = (bswap32(mr->watts) & 0xFFFFFF);
 
             // Bit 1 of the left most byte indicates a negative value
             if (watts & 0x800000) {
@@ -305,8 +306,17 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                     // Exactly "negative zero", which means "missing data"
                     ESP_LOGI(TAG, "Instant Watts value missing");
                     return;
-                }
-                watts -= 0x1000000;
+                } else if (watts & 0xC00000) {
+                    // This is either more than 12MW being returned,
+                    // or it's a negative number in 1's complement.
+                    // Since the returned value is a 24-bit value
+                    // and "watts" is a 32-bit signed int, we can
+                    // get away with this.
+                    watts -= 0xFFFFFF;
+                } else {
+                    // If we get here, then hopefully it's a negative
+                    // number in signed magnitude format
+                    watts = (watts ^ 0x800000) * -1;
             }
 
             if ((watts >= WATTS_MAX) || (watts < WATTS_MIN)) {
