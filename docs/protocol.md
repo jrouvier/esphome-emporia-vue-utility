@@ -40,18 +40,7 @@ The mac address reponse bytes are in reverse order, if the device responds with 
 `88:77:66:55:44:33:22:11`
 
 #### Install code response payload
-The install code bytes are also swapped, see mac address response above
+The install code bytes are not swapped like the mac address payload.
 
 #### Meter reading response payload
-
-| Bytes | Meaning |
-| ----- | ------- |
-|  0 -  3 | Unknown, usually zeros |
-|  4 -  7 | Watt hours consumed.  Sometimes an invalid number greater than `0x0040 0000` is returned, which is not well understood |
-|  8 - 43 | Unknown, seems to always be zeros |
-| 44 - 47 | Unknown, seems to typically be `0x0000 0001` |
-| 48 - 51 | Potentially a Watt-Hour to kWh divisor, typically `0x0000 0x03E8` (1000) |
-| 52 - 55 | Unknown, typically `0xfbfb 0000` |
-| 56 - 59 | Watts being consumed right now.  Bit 24 being high (`0x0080 0000`) indicates a negative number, Sometimes data is missing, indicated by negative zero, exactly `0x0080 0000` |
-| 60 - 147 | Unknown, usually zeros |
-| 148 - 151 | Time since the watt-hour value was reset to zero in ms as a big endian number |
+The meter response payload has it's own page [protocol-meter-reading.md](protocol-meter-reading.md)
