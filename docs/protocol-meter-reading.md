@@ -1,7 +1,9 @@
 # Meter Response Payload
 
-The meter reading response contains 152 bytes of payload, most of which seems to always be zeros.  The below table details the payload format.
-Blank cells have never been seen to be anything other than zero.  Note the table is zero-indexed
+The meter reading response contains 152 bytes of payload, most of which seem to always be zeros.  The fields in the payload have
+a mix of sizes and just to make things more confusing, the use of LSB / MSB byte ordering is inconsistent.  
+The below table details the payload format that's been reversed engineered so far.
+Blank cells have never been seen to be anything other than zero.  Note the table is zero-indexed (starts at byte zero, not byte 1)
 
 <table  style="width:20%">
   <tr>   <td></td>
