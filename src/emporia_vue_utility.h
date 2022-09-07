@@ -56,12 +56,17 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             char is_resp;
             char msg_type;
             uint8_t data_len;
-            byte unknown1[4];
-            uint32_t watt_hours;
-            byte unknown2[48];
-            uint32_t watts;
-            byte unknown3[88];
-            uint32_t ms_since_reset;
+            byte unknown0[4];    // Payload Bytes 0 to 3
+            uint32_t watt_hours; // Payload Bytes 4 to 7
+            byte unknown8[39];   // Payload Bytes 8 to 46
+            uint8_t meter_div;   // Payload Byte  47
+            byte unknown48[2];   // Payload Bytes 48 to 49
+            uint16_t cost_unit;  // Payload Bytes 50 to 51
+            byte maybe_flags[2]; // Payload Bytes 52 to 53
+            byte unknown54[2];   // Payload Bytes 54 to 55
+            uint32_t watts;      // Payload Bytes 56 to 59
+            byte unknown3[88];   // Payload Bytes 60 to 147
+            uint32_t timestamp;  // Payload Bytes 148 to 152
         };
 
         // A Mac Address or install code response
@@ -99,7 +104,14 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
         uint16_t data_len;
 
         time_t last_meter_reading = 0;
+        bool last_reading_has_error;
         time_t now;
+
+        // The most recent meter divisor, meter reading payload byte 47
+        uint8_t meter_div = 0;
+
+        // The most recent cost unit
+        uint16_t cost_unit = 0;
 
         // Turn the wifi led on/off
         void led_wifi(bool state) {
@@ -215,24 +227,50 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
 
         void handle_resp_meter_reading() {
             int32_t input_value;
+            float watt_hours;
+            float watts;
             struct MeterReading *mr;
             mr = &input_buffer.mr;
 
             // Make sure the packet is as long as we expect
             if (pos < sizeof(struct MeterReading)) {
                 ESP_LOGE(TAG, "Short meter reading packet");
-                ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
+                last_reading_has_error = 1;
                 return;
             }
 
-            parse_meter_watt_hours(mr);
-            parse_meter_watts(mr);
+            // Setup Meter Divisor
+            if ((mr->meter_div > 10) || (mr->meter_div < 1)) {
+                ESP_LOGW(TAG, "Unreasonable MeterDiv value %d, ignoring", mr->meter_div);
+                last_reading_has_error = 1;
+                ask_for_bug_report();
+            } else if ((meter_div != 0) && (mr->meter_div != meter_div)) {
+                ESP_LOGW(TAG, "MeterDiv value changed from %d to %d", meter_div, mr->meter_div);
+                last_reading_has_error = 1;
+                meter_div = mr->meter_div;
+            } else {
+                meter_div = mr->meter_div;
+            }
 
-            // Unlike the other values, ms_since_reset is in our native byte order
-            ESP_LOGD(TAG, "Seconds since meter watt-hour reset: %.3f", float(mr->ms_since_reset) / 1000.0 );
+            // Setup Cost Unit
+            cost_unit = ((mr->cost_unit & 0x00FF) << 8) 
+                      + ((mr->cost_unit & 0xFF00) >> 8); 
 
+            watt_hours = parse_meter_watt_hours(mr);
+            watts      = parse_meter_watts(mr);
+            
             // Extra debugging of non-zero bytes, only on first packet or if DEBUG_VUE_RESPONSE is true
             if ((DEBUG_VUE_RESPONSE) || (last_meter_reading == 0)) {
+                ESP_LOGD(TAG, "Meter Divisor: %d", meter_div);
+                ESP_LOGD(TAG, "Meter Cost Unit: %d", cost_unit);
+                ESP_LOGD(TAG, "Meter Flags: %02x %02x", mr->maybe_flags[0], mr->maybe_flags[1]);
+                ESP_LOGD(TAG, "Meter Energy Flags: %02x", (byte)mr->watt_hours);
+                ESP_LOGD(TAG, "Meter Power Flags: %02x", (byte)mr->watts);
+                // Unlike the other values, ms_since_reset is in our native byte order
+                ESP_LOGD(TAG, "Meter Timestamp: %.f", float(mr->timestamp) / 1000.0 );
+                ESP_LOGD(TAG, "Meter Energy: %.3fkWh", watt_hours / 1000.0 );
+                ESP_LOGD(TAG, "Meter Power:  %3.0fW", watts);
+
                 for (int x = 1 ; x < pos / 4 ; x++) {
                     int y = x * 4;
                     if (       (input_buffer.data[y])
@@ -252,47 +290,61 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             ESP_LOGE(TAG, "  https://forms.gle/duMdU2i7wWHdbK5TA");
             ESP_LOGE(TAG, "and include a few lines above this message and the data below until \"EOF\":");
             ESP_LOGE(TAG, "Full packet:");
-            ESP_LOG_BUFFER_HEXDUMP(TAG, input_buffer.data, pos, ESP_LOG_ERROR);
+            for (int x = 1 ; x < pos / 4 ; x++) {
+                int y = x * 4;
+                    if (       (input_buffer.data[y])
+                            || (input_buffer.data[y+1])
+                            || (input_buffer.data[y+2])
+                            || (input_buffer.data[y+3])) {
+                        ESP_LOGE(TAG, "  Meter Response Bytes %3d to %3d: %02x %02x %02x %02x", y-4, y-1,
+                                input_buffer.data[y], input_buffer.data[y+1],
+                                input_buffer.data[y+2], input_buffer.data[y+3]);
+                    }
+            }
             ESP_LOGI(TAG, "MGM Firmware Version: %d",      mgm_firmware_ver);
             ESP_LOGE(TAG, "EOF");
         }
 
-
-        void parse_meter_watt_hours(struct MeterReading *mr) {
+        float parse_meter_watt_hours(struct MeterReading *mr) {
             // Keep the last N watt-hour samples so invalid new samples can be discarded
-            static int32_t history[MAX_WH_CHANGE_ARY];
+            static float history[MAX_WH_CHANGE_ARY];
             static uint8_t  history_pos;
             static bool not_first_run;
 
             // Counters for deriving consumed and returned separately
-            static int32_t consumed;
-            static int32_t returned;
+            static uint32_t consumed;
+            static uint32_t returned;
 
-            // So we can avoid updating when no change
-            static int32_t prev_reported_net;
+            float   prev_wh;
 
-            int32_t watt_hours;
-            int32_t wh_diff;
-            int32_t history_avg;
-            int8_t x;
+            float   watt_hours;
+            int32_t watt_hours_raw;
+            float   wh_diff;
+            float   history_avg;
+            int8_t  x;
 
-            watt_hours = bswap32(mr->watt_hours);
+            watt_hours_raw = bswap32(mr->watt_hours);
             if (
-                      (watt_hours == 4194304) //  "missing data" message (0x00 40 00 00)
-                   || (watt_hours == 0)) { 
+                      (watt_hours_raw == 4194304) //  "missing data" message (0x00 40 00 00)
+                   || (watt_hours_raw == 0)) { 
                 ESP_LOGI(TAG, "Watt-hours value missing");
-                ask_for_bug_report();
-                return;
+                last_reading_has_error = 1;
+                return(0);
             }
+
+            // Handle if a meter divisor is in effect
+            watt_hours = (float)watt_hours_raw / (float)meter_div;
 
             if (!not_first_run) {
                 // Initialize watt-hour filter on first run
                 for (x = MAX_WH_CHANGE_ARY ; x != 0 ; x--) {
                     history[x-1] = watt_hours;
                 }
-
                 not_first_run = 1;
             }
+
+            // Fetch the previous value from history
+            prev_wh = history[history_pos];
 
             // Insert a new value into filter array
             history_pos++;
@@ -308,30 +360,15 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             }
 
             // Get the difference of current value from avg
-            wh_diff = history_avg - watt_hours;
-
-            if (abs(wh_diff) > MAX_WH_CHANGE) {
-                ESP_LOGE(TAG, "Unreasonable watt-hours data of %d, +%d from moving avg",
-                        watt_hours, wh_diff);
-                ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watt_hours, 4, ESP_LOG_ERROR);
-                ask_for_bug_report();
-                return;
+            if (abs(history_avg - watt_hours) > MAX_WH_CHANGE) {
+                ESP_LOGE(TAG, "Unreasonable watt-hours of %f, +%f from moving avg",
+                        watt_hours, watt_hours - history_avg);
+                last_reading_has_error = 1;
+                return(watt_hours);
             }
 
-            // Change wd_diff to difference from previously reported value
-            // instead of diff from average
-            wh_diff = watt_hours - prev_reported_net;
-            prev_reported_net = watt_hours;
-
-            // On a reset of the meter net value and also on first boot
-            // we don't want the consumed and returned values to be insane.
-            if (abs(wh_diff) > MAX_WH_CHANGE) {
-                if (wh_diff != watt_hours) {
-                    ESP_LOGE(TAG, "Skipping absurd watt-hour delta of +%d", wh_diff);
-                    ask_for_bug_report();
-                }
-                return;
-            }
+            // Get the difference from previously reported value
+            wh_diff = watt_hours - prev_wh;
 
             if (wh_diff > 0) { // Energy consumed from grid
                 if (consumed > UINT32_MAX - wh_diff) {
@@ -350,43 +387,49 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
 
             kWh_consumed->publish_state(float(consumed) / 1000.0);
             kWh_returned->publish_state(float(returned) / 1000.0);
-            kWh_net->publish_state(float(watt_hours) / 1000.0);
+            kWh_net->publish_state(watt_hours / 1000.0);
+
+            return(watt_hours);
         }
 
-        void parse_meter_watts(struct MeterReading *mr) {
-            int32_t watts;
+        float parse_meter_watts(struct MeterReading *mr) {
+            int32_t watts_raw;
+            float   watts;
 
             // Read the instant watts value
             // (it's actually a 24-bit int)
-            watts = (bswap32(mr->watts) & 0xFFFFFF);
+            watts_raw = (bswap32(mr->watts) & 0xFFFFFF);
 
             // Bit 1 of the left most byte indicates a negative value
-            if (watts & 0x800000) {
-                if (watts == 0x800000) {
+            if (watts_raw & 0x800000) {
+                if (watts_raw == 0x800000) {
                     // Exactly "negative zero", which means "missing data"
                     ESP_LOGI(TAG, "Instant Watts value missing");
-                    return;
-                } else if (watts & 0xC00000) {
+                    return(0);
+                } else if (watts_raw & 0xC00000) {
                     // This is either more than 12MW being returned,
                     // or it's a negative number in 1's complement.
                     // Since the returned value is a 24-bit value
                     // and "watts" is a 32-bit signed int, we can
                     // get away with this.
-                    watts -= 0xFFFFFF;
+                    watts_raw -= 0xFFFFFF;
                 } else {
                     // If we get here, then hopefully it's a negative
                     // number in signed magnitude format
-                    watts = (watts ^ 0x800000) * -1;
+                    watts_raw = (watts_raw ^ 0x800000) * -1;
                 }
             }
 
+            // Handle if a meter divisor is in effect
+            watts = (float)watts_raw / (float)meter_div;
+
             if ((watts >= WATTS_MAX) || (watts < WATTS_MIN)) {
-                ESP_LOGE(TAG, "Unreasonable watts value %d", watts);
-                ESP_LOG_BUFFER_HEXDUMP(TAG, (void *)&mr->watts, 4, ESP_LOG_ERROR);
-                ask_for_bug_report();
-                return;
+                ESP_LOGE(TAG, "Unreasonable watts value %f", watts);
+                last_reading_has_error = 1;
+            } else {
+                W->publish_state(watts);
             }
-            W->publish_state(watts);
+            return(watts);
         }
 
         void handle_resp_meter_join() {
@@ -520,9 +563,14 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                 switch (msg_type) {
                     case 'r': // Meter reading
                         led_link(true);
+                        last_reading_has_error = 0;
                         handle_resp_meter_reading();
-                        last_meter_reading = now;
-                        next_meter_join = now + METER_REJOIN_INTERVAL;
+                        if (last_reading_has_error) {
+                            ask_for_bug_report();
+                        } else {
+                            last_meter_reading = now;
+                            next_meter_join = now + METER_REJOIN_INTERVAL;
+                        }
                         break;
                     case 'j': // Meter reading
                         handle_resp_meter_join();
