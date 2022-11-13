@@ -47,7 +47,9 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
         Sensor *kWh_net      = new Sensor();
         Sensor *kWh_consumed = new Sensor();
         Sensor *kWh_returned = new Sensor();
-        Sensor *W       = new Sensor();
+        Sensor *W            = new Sensor();
+        Sensor *W_consumed   = new Sensor();
+        Sensor *W_returned   = new Sensor();
 
         const char *TAG = "Vue";
 
@@ -428,6 +430,13 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                 last_reading_has_error = 1;
             } else {
                 W->publish_state(watts);
+                if (watts > 0) {
+                  W_consumed->publish_state(watts);
+                  W_returned->publish_state(0);
+                } else {
+                  W_consumed->publish_state(0);
+                  W_returned->publish_state(-watts);
+                }
             }
             return(watts);
         }
