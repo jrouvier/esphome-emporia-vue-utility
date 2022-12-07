@@ -564,7 +564,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             byte inb;
 
             msg_len = read_msg();
-            now = time(&now);
+            now = ::time(&now);
             if (msg_len != 0) {
 
                 msg_type = input_buffer.data[2];
