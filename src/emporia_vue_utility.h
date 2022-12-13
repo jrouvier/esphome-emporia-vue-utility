@@ -381,7 +381,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
                 if (returned > UINT32_MAX - wh_diff) {
                     returned -= UINT32_MAX - wh_diff;
                 } else {
-                    returned += wh_diff;
+                    returned -= wh_diff;
                 }
             }
 
