@@ -47,6 +47,19 @@ ESP32 Serial programming interface.  Note that pin 6 is 5 volt, not 3.3 volt.
 
 JTAG interface to the MGM111 module
 
+| Pin | MGM Pin | MGM Port | Description |
+| --- | ------- | -------- | ----------- |
+|  1  |         |          |      +3.3v  |
+|  2  |         |          |       GND   |
+|  3  |    30   |  RESETn  |      Reset  |
+|  4  |    27   |     PF6  |             |
+|  5  |    28   |     PF7  |             |
+|  6  |    23   |     PF2  |         SWO |
+|  7  |    22   |     PF1  |       SWDIO |
+|  8  |    21   |     PF0  |       SWCLK |
+|  9  |    13   |    PB13  |             |
+| 10  |    11   |    PB11  |             |
+
 ### P5
 
 | Pin | ESP Pin | MGM111 Pin | Description |
