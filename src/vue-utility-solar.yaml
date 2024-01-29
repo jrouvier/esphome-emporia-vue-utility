@@ -25,7 +25,7 @@ api:
 
 mqtt:
     broker: !secret mqtt_broker
-    id: vue-utility
+    id: vue_utility
     username: !secret mqtt_username
     password: !secret mqtt_password
     discovery: False # Only if you use the HA API usually
