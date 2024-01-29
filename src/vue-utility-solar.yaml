@@ -25,7 +25,7 @@ api:
 
 mqtt:
     broker: !secret mqtt_broker
-    id: vue-utility
+    id: vue_utility
     username: !secret mqtt_username
     password: !secret mqtt_password
     discovery: False # Only if you use the HA API usually
@@ -42,7 +42,7 @@ sensor:
       lambda: |-
         auto vue = new EmporiaVueUtility(id(emporia_uart));
         App.register_component(vue);
-        return {vue->kWh_consumed, vue->kWh_returned, vue->W, vue->kWh_net};
+        return {vue->kWh_consumed, vue->kWh_returned, vue->W_consumed, vue->W_returned, vue->W, vue->kWh_net};
       sensors:
           - name: "kWh Consumed"
             id: kWh_consumed
@@ -87,6 +87,44 @@ sensor:
                 then:
                     lambda: |-
                         ESP_LOGI("Vue", "kWh = %0.3f", x);
+
+          - name: "Watts consumed"
+            id: watts_consumed
+            unit_of_measurement: "W"
+            accuracy_decimals: 0
+            state_class: measurement
+            device_class: power
+            # Report every 5 minutes or when +/- 20 watts
+            filters:
+                - or:
+                    - throttle: 5min
+                    - delta: 20  # <- watts
+                    - lambda: |-
+                        if (id(fast_reporting)) return(x);
+                        return {};
+            on_raw_value:
+                then:
+                    lambda: |-
+                        ESP_LOGI("Vue", "Watts consumed = %0.3f", x);
+
+          - name: "Watts returned"
+            id: watts_returned
+            unit_of_measurement: "W"
+            accuracy_decimals: 0
+            state_class: measurement
+            device_class: power
+            # Report every 5 minutes or when +/- 20 watts
+            filters:
+                - or:
+                    - throttle: 5min
+                    - delta: 20  # <- watts
+                    - lambda: |-
+                        if (id(fast_reporting)) return(x);
+                        return {};
+            on_raw_value:
+                then:
+                    lambda: |-
+                        ESP_LOGI("Vue", "Watts returned = %0.3f", x);
 
           - name: "Watts"
             id: watts
