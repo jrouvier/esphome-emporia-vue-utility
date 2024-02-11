@@ -335,7 +335,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             }
 
             // Handle if a meter divisor is in effect
-            watt_hours = (float)watt_hours_raw * (float)meter_div;
+            watt_hours = (float)watt_hours_raw * ((float)meter_div / ((float)mr->cost_unit / 1000));
 
             if (!not_first_run) {
                 // Initialize watt-hour filter on first run
@@ -423,7 +423,7 @@ class EmporiaVueUtility : public Component,  public UARTDevice {
             }
 
             // Handle if a meter divisor is in effect
-            watts = (float)watts_raw * (float)meter_div;
+            watts = (float)watts_raw * ((float)meter_div / ((float)mr->cost_unit / 1000));
 
             if ((watts >= WATTS_MAX) || (watts < WATTS_MIN)) {
                 ESP_LOGE(TAG, "Unreasonable watts value %f", watts);
