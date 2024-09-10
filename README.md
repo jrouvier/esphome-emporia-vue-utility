@@ -1,3 +1,12 @@
+> [!WARNING]
+> ### No longer actively maintained!
+>
+> Due to conflicts with my employment, I am no longer able to maintain or support this.  However, @nekorevend has a fork that is actively maintained and I recommend:
+> ### https://github.com/nekorevend/esphome-emporia-vue-utility ###
+>
+> -Joe
+
+
 # ESPHome Emporia Vue Utility Connect Unofficial Firmware
 
 This is an unauthorized and unoffical firmware for the Emporia View Utility Connect device that reports energy usage to Home Assistant and completely divorces the device from Emporia's servers.
